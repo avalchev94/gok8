@@ -1,14 +1,24 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/avalchev94/gok8/internal/diagnostics"
 	"github.com/gorilla/mux"
 )
+
+type serverConf struct {
+	port   string
+	router http.Handler
+	name   string
+}
 
 func main() {
 	log.Printf("Starting the application...")
@@ -25,20 +35,58 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/", handleHello)
 
-	go func() {
-		log.Print("The application server is starting...")
-		err := http.ListenAndServe(":"+blPort, router)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}()
+	possibleErrors := make(chan error, 2)
 
-	log.Print("The diagnostics server is starting...")
-	err := http.ListenAndServe(":"+diagPort, diagnostics.NewDiagnostics())
-	if err != nil {
-		log.Fatal(err)
+	configurations := []serverConf{
+		{
+			port:   blPort,
+			router: router,
+			name:   "application server",
+		},
+		{
+			port:   diagPort,
+			router: diagnostics.NewDiagnostics(),
+			name:   "diagnostics server",
+		},
 	}
 
+	servers := make([]*http.Server, 2)
+
+	for i, c := range configurations {
+		go func(conf serverConf, i int) {
+			log.Printf("The %s is preparing to handle connections...", conf.name)
+			servers[i] = &http.Server{
+				Addr:    ":" + conf.port,
+				Handler: conf.router,
+			}
+			err := servers[i].ListenAndServe()
+			if err != nil {
+				possibleErrors <- err
+			}
+		}(c, i)
+	}
+
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-possibleErrors:
+		log.Printf("Got an error %v", err)
+	case sig := <-interrupt:
+		log.Printf("Recieved the signal %v", sig)
+	}
+
+	for _, s := range servers {
+		timeout := 5 * time.Second
+		log.Printf("Shutdown with timeout: %s\n", timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		customError := s.Shutdown(ctx)
+		if customError != nil {
+			fmt.Println(customError)
+		}
+		log.Println("Graceful shutdown")
+	}
 }
 
 func handleHello(w http.ResponseWriter, r *http.Request) {
