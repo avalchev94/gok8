@@ -4,25 +4,35 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/avalchev94/gok8/internal/diagnostics"
 	"github.com/gorilla/mux"
 )
 
 func main() {
-	log.Printf("Hello, World")
+	log.Printf("Starting the application...")
+
+	blPort := os.Getenv("PORT")
+	if len(blPort) == 0 {
+		log.Fatal("The port should be set")
+	}
+	diagPort := os.Getenv("DIAG_PORT")
+	if len(diagPort) == 0 {
+		log.Fatal("The diagnostics port should be set")
+	}
 
 	router := mux.NewRouter()
 	router.HandleFunc("/", handleHello)
 
 	go func() {
-		err := http.ListenAndServe(":8080", router)
+		err := http.ListenAndServe(":"+blPort, router)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}()
 
-	err := http.ListenAndServe(":8585", diagnostics.NewDiagnostics())
+	err := http.ListenAndServe(":"+diagPort, diagnostics.NewDiagnostics())
 	if err != nil {
 		log.Fatal(err)
 	}
